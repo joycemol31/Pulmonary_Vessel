@@ -11,16 +11,28 @@ import scipy.ndimage
 import vtk_nifit_render
 from nilearn import image
 from mayavi import mlab
+import visvis as vv
+import mayavi
 from skimage import measure
 import skimage.io
 import skimage.morphology as morphology
+import cv2
+import math
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 
 niftipath = '/hpc/jjoh182/Python Project Master/pulmonary_vessel/tempcenterline.nii'
-nifti_im_nii = nib.load(niftipath)
-nifti_im = np.asarray(nifti_im_nii.get_data())
-img = nifti_im
+fullVesselPath = '/hpc/jjoh182/Python Project Master/pulmonary_vessel/temp.nii'
+
+def nifti2array(niftipath):
+    nifti_im_nii = nib.load(niftipath)
+    nifti_im = np.asarray(nifti_im_nii.get_data())
+    array = nifti_im
+    return array
+
+img = nifti2array(niftipath)
+fullVessel = nifti2array(fullVesselPath)
 
 # # do some closing (noise removing)
 # d = morphology.ball(2);
@@ -33,6 +45,9 @@ img = nifti_im
 
 # print(imgSkT.shape)
 print(img.shape)
+
+new_img_dst = scipy.ndimage.morphology.distance_transform_edt(img)
+
 
 class Vertex:
     def __init__(self, point, degree=0, edges=None):
@@ -487,18 +502,12 @@ print("built %i graphs" % len(combined_graph))
 
 def branchPoints (g):
     # start not at degree 2 nodes
+    bNodeArray = np.zeros(img.shape)
     bNodes = np.array([bN.point for bN in g.nodes() if nx.degree(g, bN) > 2])
     pos = nx.get_node_attributes(g, 'pos')
     print "bnodes"
     print bNodes.shape
 
-    # Get number of nodes
-    # n = bNodes.number_of_nodes()
-    # print "number" + str(n)
-    # Get the maximum number of edges adjacent to a single node
-    # edge_max = max([G.degree(i) for i in range(n)])
-    # Define color range proportional to number of edges adjacent to a single node
-    # colors = [plt.cm.plasma(G.degree(i) / edge_max) for i in range(n)]
     # 3D network plot
     with plt.style.context(('ggplot')):
         fig = plt.figure(figsize=(10, 7))
@@ -506,10 +515,12 @@ def branchPoints (g):
 
         for i in range(0,bNodes.shape[0]):
             point = bNodes[i,:]
+            print point
             x = point[0]
             y = point[1]
             z = point[2]
             ax.scatter(x,y,z)
+            bNodeArray[x,y,z]=1
 
         # Loop on the pos dictionary to extract the x,y,z coordinates of each node
         # for key, value in pos.items():
@@ -521,7 +532,88 @@ def branchPoints (g):
         #     ax.scatter(xi, yi, zi, s=20 + 20 * g.degree(key), edgecolors='k', alpha=0.7)  # c=colors[key]
     plt.show()
 
-branchPoints(combined_graph)
+
+
+    return bNodeArray
+
+def pointsOnScatter (list):
+    listPointArray = np.zeros(img.shape)
+    with plt.style.context(('ggplot')):
+        fig = plt.figure(figsize=(10, 7))
+        ax = Axes3D(fig)
+
+        for i in range(0,list.shape[0]):
+            point = list[i,:]
+            print point
+            x = point[0]
+            y = point[1]
+            z = point[2]
+            ax.scatter(x,y,z)
+            listPointArray[x, y, z] = 1
+
+        # Loop on the pos dictionary to extract the x,y,z coordinates of each node
+        # for key, value in pos.items():
+        #     xi = value[0]
+        #     yi = value[1]
+        #     zi = value[2]
+        #
+        #     # Scatter plot
+        #     ax.scatter(xi, yi, zi, s=20 + 20 * g.degree(key), edgecolors='k', alpha=0.7)  # c=colors[key]
+    plt.show()
+    return listPointArray
+
+s = scipy.ndimage.generate_binary_structure(3, 3)
+branchNodesArray = branchPoints(combined_graph)
+branchNodesArray = scipy.ndimage.binary_dilation(branchNodesArray,structure=s,iterations=5).astype(np.int32)
+branchNodesArray = 1 - branchNodesArray #invert array
+branchAlone = fullVessel * branchNodesArray
+branchAloneCenterline = img * branchNodesArray
+
+#to get surface of mask
+vertices, faces, normals , values = skimage.measure.marching_cubes_lewiner(branchAlone)
+vertices1, faces1, normals1, values1 = skimage.measure.marching_cubes_lewiner(new_img_dst)
+
+s = scipy.ndimage.generate_binary_structure(3, 3)
+label_im, nb_labels = scipy.ndimage.label(branchAlone,structure=s)
+regions = skimage.measure.regionprops(label_im)
+
+interestedlabel = np.where(label_im == 1, 1, 0).astype(np.int32)
+interestedlabel2 = np.where(label_im == 7, 1, 0).astype(np.int32)
+interestedlabel3 = np.where(label_im == 30, 1, 0).astype(np.int32)
+interestedlabel4 = np.where(label_im == 44, 1, 0).astype(np.int32)
+interestedlabel = interestedlabel + interestedlabel2 + interestedlabel3 + interestedlabel4
+
+# interestedlabel = label_im
+
+print len(regions)
+
+for rg in regions:
+
+    csa = np.pi * (rg.minor_axis_length/2) * (rg.minor_axis_length/2)
+    print "label:", rg.label, "radii", rg.minor_axis_length / 2, "cross sec area:", csa
+
+
+
+
+# pointsOnScatter(vertices)
+
+# mlab.triangular_mesh([vert[0] for vert in vertices],
+#                         [vert[1] for vert in vertices],
+#                         [vert[2] for vert in vertices],
+#                         faces)
+# mlab.show()
+# print normals
+
+
+# vv.mesh(np.fliplr(vertices), faces, normals, values)
+vv.mesh(vertices, faces, normals, values)
+# vv.mesh(vertices1, faces1, normals1, values1)
+vv.use().Run()
+# def branchSegmentExtraction(branchNodes):
+
+# def radiusEstimation(branchAlone, branchAloneCenterline):
+
+
 
 
 # simpleGraphs = []
@@ -551,8 +643,8 @@ branchPoints(combined_graph)
 targetaffine4x4 = np.eye(4) * 2
 targetaffine4x4[3,3] = 1
 
-nifti_image_from_array = nib.Nifti1Image(img,targetaffine4x4)
-save_path = '/hpc/jjoh182/Python Project Master/pulmonary_vessel/tempresample.nii'
+nifti_image_from_array = nib.Nifti1Image(interestedlabel,targetaffine4x4)
+save_path = '/hpc/jjoh182/Python Project Master/pulmonary_vessel/branchalone.nii'
 nib.save(nifti_image_from_array, save_path)
 vtk_nifit_render.vtk_pipeline(save_path)
-vtk_nifit_render.vtk_pipeline(niftipath)
+# vtk_nifit_render.vtk_pipeline(niftipath)
